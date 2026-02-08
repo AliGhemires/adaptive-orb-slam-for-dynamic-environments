@@ -1,179 +1,134 @@
 import numpy as np
-from typing import List, Tuple, Optional, Union
+from typing import List, Tuple, Optional
 
 
 class Geometry:
-    """
-    A class for performing various geometric operations required in visual SLAM,
-    including calculations for transformations, distances, and projections.
-    """
-
     @staticmethod
-    def normalize(v: np.ndarray) -> np.ndarray:
-        """
-        Normalize a vector to unit length.
-        
+    def compute_homogeneous_coordinates(points: List[Tuple[float, float]]) -> np.ndarray:
+        """Convert 2D points to homogeneous coordinates.
+
         Args:
-            v (np.ndarray): The input vector to normalize.
+            points (List[Tuple[float, float]]): List of 2D points as tuples (x, y).
 
         Returns:
-            np.ndarray: The normalized vector.
-            
+            np.ndarray: Array of points in homogeneous coordinates.
+
         Raises:
-            ValueError: If the vector is zero or has an invalid shape.
+            ValueError: If the input list of points is empty.
         """
-        if not isinstance(v, np.ndarray) or v.ndim != 1:
-            raise ValueError("Input must be a one-dimensional np.ndarray")
-        norm = np.linalg.norm(v)
-        if norm == 0:
-            raise ValueError("Cannot normalize a zero vector")
-        return v / norm
+        # Validate input
+        if not points:
+            raise ValueError('Input points list cannot be empty.')
+
+        return np.vstack([np.array(points).T, np.ones(len(points))])
 
     @staticmethod
-    def distance(point1: np.ndarray, point2: np.ndarray) -> float:
-        """
-        Calculate the Euclidean distance between two points.
-        
+    def compute_affine_transformation(src_points: List[Tuple[float, float]],
+                                       dst_points: List[Tuple[float, float]]) -> Optional[np.ndarray]:
+        """Compute the affine transformation matrix that maps src_points to dst_points.
+
         Args:
-            point1 (np.ndarray): First point in n-dimensional space.
-            point2 (np.ndarray): Second point in n-dimensional space.
+            src_points (List[Tuple[float, float]]): Source points.
+            dst_points (List[Tuple[float, float]]): Destination points.
 
         Returns:
-            float: The Euclidean distance between the points.
-            
+            Optional[np.ndarray]: Affine transformation matrix of shape (3, 3) or None if the computation fails.
+
         Raises:
-            ValueError: If the inputs do not have the same shape or are not valid arrays.
+            ValueError: If fewer than 3 pairs of corresponding points are provided.
         """
-        if not (isinstance(point1, np.ndarray) and isinstance(point2, np.ndarray)):
-            raise ValueError("Inputs must be np.ndarray")
-        if point1.shape != point2.shape:
-            raise ValueError("Points must have the same dimensions")
-        return np.linalg.norm(point1 - point2)
+        # Validate input
+        if len(src_points) != len(dst_points) or len(src_points) < 3:
+            raise ValueError('At least 3 pairs of corresponding points are needed for affine transformation.')
+
+        src = Geometry.compute_homogeneous_coordinates(src_points)
+        dst = Geometry.compute_homogeneous_coordinates(dst_points)
+
+        # Prepare matrices for solving
+        A = np.vstack((src[:2].T, np.ones(len(src_points)))).T
+        B = dst[:2].T
+
+        # Solve for the transformation matrix using least squares
+        A_solution, _, _, _ = np.linalg.lstsq(A, B, rcond=None)
+
+        # Construct the affine transformation matrix
+        transform_matrix = np.eye(3)
+        transform_matrix[:2, :] = A_solution.T
+
+        return transform_matrix
 
     @staticmethod
-    def transform_point(point: np.ndarray, transformation_matrix: np.ndarray) -> np.ndarray:
-        """
-        Transform a point using a transformation matrix (4x4).
-        
+    def apply_transformation(points: List[Tuple[float, float]],
+                             transformation: np.ndarray) -> np.ndarray:
+        """Apply a transformation matrix to a list of points.
+
         Args:
-            point (np.ndarray): The point as a homogeneous coordinate [x, y, z, 1].
-            transformation_matrix (np.ndarray): The transformation matrix (4x4).
+            points (List[Tuple[float, float]]): List of points to transform.
+            transformation (np.ndarray): Transformation matrix.
 
         Returns:
-            np.ndarray: The transformed point as a homogeneous coordinate.
-            
+            np.ndarray: Transformed points.
+
         Raises:
-            ValueError: If the point is not in homogeneous coordinates or if the dimension mismatch occurs.
+            ValueError: If transformation matrix is not 3x3 or points list is empty.
         """
-        if not isinstance(point, np.ndarray) or not isinstance(transformation_matrix, np.ndarray):
-            raise ValueError("Both arguments must be np.ndarray")
-        if point.shape != (4,):
-            raise ValueError("Point must be a 1D array in homogeneous coordinates")
-        if transformation_matrix.shape != (4, 4):
-            raise ValueError("Transformation matrix must be 4x4")
-        return transformation_matrix @ point
+        if transformation.shape != (3, 3):
+            raise ValueError('Transformation matrix must be 3x3.')
+
+        if not points:
+            raise ValueError('Input points list cannot be empty.')
+
+        homogeneous_points = Geometry.compute_homogeneous_coordinates(points)
+
+        # Apply the transformation
+        transformed_points = transformation @ homogeneous_points
+
+        # Convert back to Cartesian coordinates
+        return (transformed_points[:-1] / transformed_points[-1]).T
 
     @staticmethod
-    def project_point(point: np.ndarray, camera_matrix: np.ndarray) -> Optional[Tuple[float, float]]:
-        """
-        Project a 3D point onto a 2D image plane using a camera matrix.
-        
+    def compute_distance(point1: Tuple[float, float], point2: Tuple[float, float]) -> float:
+        """Compute Euclidean distance between two 2D points.
+
         Args:
-            point (np.ndarray): The 3D point to be projected.
-            camera_matrix (np.ndarray): The intrinsic camera matrix (3x3).
+            point1 (Tuple[float, float]): First point.
+            point2 (Tuple[float, float]): Second point.
 
         Returns:
-            Optional[Tuple[float, float]]: The 2D coordinates on the image plane (u, v),
-            or None if the point is at infinity.
-            
-        Raises:
-            ValueError: If the point does not have the correct dimensionality.
+            float: Distance between point1 and point2.
         """
-        if not isinstance(point, np.ndarray) or not isinstance(camera_matrix, np.ndarray):
-            raise ValueError("Both arguments must be np.ndarray")
-        if point.shape != (3,):
-            raise ValueError("Point must be a 3D vector")
-        if camera_matrix.shape != (3, 3):
-            raise ValueError("Camera matrix must be 3x3")
-        homogeneous_point = np.append(point, 1)
-        projected_point = camera_matrix @ homogeneous_point
-        # Normalize by the third coordinate (homogeneous coordinate)
-        if projected_point[2] == 0:
-            return None  # Point is at infinity
-        return (projected_point[0] / projected_point[2], projected_point[1] / projected_point[2])
+        return np.linalg.norm(np.array(point1) - np.array(point2))
 
     @staticmethod
-    def angle_between(v1: np.ndarray, v2: np.ndarray) -> float:
-        """
-        Calculate the angle in radians between two vectors.
-        
+    def centroid(points: List[Tuple[float, float]]) -> Tuple[float, float]:
+        """Compute the centroid of a list of 2D points.
+
         Args:
-            v1 (np.ndarray): First vector.
-            v2 (np.ndarray): Second vector.
+            points (List[Tuple[float, float]]): List of 2D points.
 
         Returns:
-            float: Angle in radians between the two vectors.
-            
-        Raises:
-            ValueError: If either vector is zero, not valid, or if they don't have the same dimension.
-        """
-        if not (isinstance(v1, np.ndarray) and isinstance(v2, np.ndarray)):
-            raise ValueError("Inputs must be np.ndarray")
-        if v1.shape != v2.shape:
-            raise ValueError("Vectors must have the same dimensions")
-        norm1 = np.linalg.norm(v1)
-        norm2 = np.linalg.norm(v2)
-        if norm1 == 0 or norm2 == 0:
-            raise ValueError("Vectors must be non-zero")
-        cos_angle = np.clip(np.dot(v1, v2) / (norm1 * norm2), -1.0, 1.0)
-        return np.arccos(cos_angle)
-
-    @staticmethod
-    def compute_plane_normal(p1: np.ndarray, p2: np.ndarray, p3: np.ndarray) -> np.ndarray:
-        """
-        Compute the normal vector of a plane defined by three points.
-        
-        Args:
-            p1 (np.ndarray): First point of the plane.
-            p2 (np.ndarray): Second point of the plane.
-            p3 (np.ndarray): Third point of the plane.
-
-        Returns:
-            np.ndarray: The normal vector of the plane.
+            Tuple[float, float]: Centroid point (x, y).
 
         Raises:
-            ValueError: If the points are not in 3D space or they are collinear.
+            ValueError: If the input list of points is empty.
         """
-        if not (isinstance(p1, np.ndarray) and isinstance(p2, np.ndarray) and isinstance(p3, np.ndarray)):
-            raise ValueError("All inputs must be np.ndarray")
-        if p1.shape != (3,) or p2.shape != (3,) or p3.shape != (3,):
-            raise ValueError("All points must be 1D arrays in 3D space")
-        # Create vectors from points
-        v1 = p2 - p1
-        v2 = p3 - p1
-        normal = np.cross(v1, v2)
-        if np.linalg.norm(normal) == 0:
-            raise ValueError("Points must not be collinear")
-        return Geometry.normalize(normal)
+        if not points:
+            raise ValueError('Input points list cannot be empty.')
 
-# Example of testing geometric utility functions using assert
+        x_coords, y_coords = zip(*points)
+        return (np.mean(x_coords), np.mean(y_coords))
+
+
+# Example usage of the Geometry class
 if __name__ == '__main__':
-    # Testing normalization
-    vec = np.array([3.0, 4.0])
-    assert np.allclose(Geometry.normalize(vec), np.array([0.6, 0.8])), "Normalization test failed"
-    
-    # Testing distance calculation
-    p1 = np.array([1.0, 2.0])
-    p2 = np.array([4.0, 6.0])
-    assert np.isclose(Geometry.distance(p1, p2), 5.0), "Distance test failed"
-    
-    # Testing point transformation
-    transformation_matrix = np.array([[1, 0, 0, 1],
-                                       [0, 1, 0, 2],
-                                       [0, 0, 1, 3],
-                                       [0, 0, 0, 1]])
-    point = np.array([1, 1, 1, 1])
-    transformed = Geometry.transform_point(point, transformation_matrix)
-    assert np.allclose(transformed, np.array([2, 3, 4, 1])), "Transformation test failed"
-    
-    print("All tests passed!")
+    points_a = [(0, 0), (1, 0), (0, 1)]
+    points_b = [(1, 1), (2, 1), (1, 2)]
+    try:
+        transformation_matrix = Geometry.compute_affine_transformation(points_a, points_b)
+        transformed_points = Geometry.apply_transformation(points_a, transformation_matrix)
+        print('Affine Transformation Matrix:')
+        print(transformation_matrix)
+        print('Transformed Points:')
+        print(transformed_points)
+    except ValueError as ve:
+        print(f'ValueError: {ve}')
